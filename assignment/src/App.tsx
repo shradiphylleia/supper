@@ -1,5 +1,5 @@
 'use client'
-
+import supabase from '../utils/supabase'
 import { useState, useRef } from 'react'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,6 +11,7 @@ import { useCompletion } from 'ai/react'
 
 
 export default function VoiceCloningApp() {
+  // state hooks for the inputs: voicefile,text and the consent
   const [voiceFile, setVoiceFile] = useState<File | null>(null)
   const [newText, setNewText] = useState('')
   const [consent, setConsent] = useState(false)
@@ -24,6 +25,7 @@ export default function VoiceCloningApp() {
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
+    //checking for valid file type and size
     if (file) {
       if (file.size > 5 * 1024 * 1024) 
       {
@@ -53,41 +55,83 @@ export default function VoiceCloningApp() {
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault()
+    event.preventDefault();
+  
     if (!voiceFile || !newText || !consent) {
       toast({
         title: "Missing information",
         description: "Please provide a voice file, text, and consent before proceeding.",
-        variant: "destructive"
-      })
-      return
+        variant: "destructive",
+      });
+      return;
     }
-
-    const formData = new FormData()
-    formData.append('voiceFile', voiceFile)
-    formData.append('newText', newText)
-
+  
     try {
-      const response = await complete(newText, {
-        body: formData,
-      })
+      // Upload voice file to `voiceInput` bucket
+      const { data: uploadData, error } = await supabase.storage
+        .from('voiceInput')
+        .upload(`uploads/${voiceFile.name}`, voiceFile);
+  
+      if (error) {
+        toast({
+          title: "Storage error",
+          description: "It is not you, it is us. There was some error while uploading.",
+        });
+        throw error;
+      }
 
+      const inputPath = uploadData.path; 
+  
+      // Make API call to process the file
+      const response = await complete(newText, {
+        body: { filePath: inputPath }, 
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+  
       if (response) {
-        setGeneratedAudioUrl(response)
+        // Fetch the  file from the response
+        const generatedAudioBlob = await fetch(response).then((res) => res.blob());
+        const generatedFileName = `generated_${Date.now()}.mp3`;
+  
+        // Store the generated file bucket
+        const { data: outputData, error: outputError } = await supabase.storage
+          .from('voiceOutput')
+          .upload(`outputs/${generatedFileName}`, generatedAudioBlob);
+  
+        if (outputError) {
+          throw outputError;
+        }
+  
+        // Generate a public URL for the uploaded file
+        const { data: publicUrlData } = supabase.storage
+          .from('voiceOutput')
+          .getPublicUrl(`outputs/${generatedFileName}`);
+  
+        if (publicUrlData) {
+          setGeneratedAudioUrl(publicUrlData.publicUrl);
+        }
+  
         toast({
           title: "Success",
           description: "Your new voice file has been generated!",
-          variant: "default"
-        })
+          variant: "default",
+        });
       }
     } catch (error) {
+      console.error(error);
       toast({
         title: "Error",
         description: "An error occurred while processing your request. Please try again.",
-        variant: "destructive"
-      })
+        variant: "destructive",
+      });
     }
-  }
+  };
+  
+ 
+  
+      
 
   return (
     <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-lg shadow-xl">
